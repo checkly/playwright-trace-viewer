@@ -109,6 +109,8 @@ async function doFetch(event: FetchEvent): Promise<Response> {
         const limit = url.searchParams.has('limit') ? +url.searchParams.get('limit')! : undefined;
         const rangeStart = url.searchParams.has('rangeStart') ? +url.searchParams.get('rangeStart')! : undefined;
         const rangeEnd = url.searchParams.has('rangeEnd') ? +url.searchParams.get('rangeEnd')! : undefined;
+        // eslint-disable-next-line no-console
+        console.log({ rangeStart, rangeEnd });
         const traceModel = await loadTrace(traceUrl!, url.searchParams.get('traceFileName'), client, limit, (done: number, total: number) => {
           client.postMessage({ method: 'progress', params: { done, total } });
         }, rangeStart, rangeEnd);
