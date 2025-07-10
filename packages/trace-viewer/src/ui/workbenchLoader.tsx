@@ -148,6 +148,15 @@ export const WorkbenchLoader: React.FunctionComponent<{
           if (uploadedTraceNames.length)
             params.set('traceFileName', uploadedTraceNames[i]);
           params.set('limit', String(traceURLs.length));
+
+          // Check for byte range parameters in the URL
+          const urlParams = new URL(window.location.href).searchParams;
+          const rangeStart = urlParams.get('rangeStart');
+          const rangeEnd = urlParams.get('rangeEnd');
+          if (rangeStart !== null)
+            params.set('rangeStart', rangeStart);
+          if (rangeEnd !== null)
+            params.set('rangeEnd', rangeEnd);
           const response = await fetch(`contexts?${params.toString()}`);
           if (!response.ok) {
             if (!isServer)

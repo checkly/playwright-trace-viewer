@@ -38,7 +38,7 @@ const loadedTraces = new Map<string, { traceModel: TraceModel, snapshotServer: S
 
 const clientIdToTraceUrls = new Map<string, { limit: number | undefined, traceUrls: Set<string>, traceViewerServer: TraceViewerServer }>();
 
-async function loadTrace(traceUrl: string, traceFileName: string | null, client: any | undefined, limit: number | undefined, progress: (done: number, total: number) => undefined): Promise<TraceModel> {
+async function loadTrace(traceUrl: string, traceFileName: string | null, client: any | undefined, limit: number | undefined, progress: (done: number, total: number) => undefined, rangeStart?: number, rangeEnd?: number): Promise<TraceModel> {
   await gc();
   const clientId = client?.id ?? '';
   let data = clientIdToTraceUrls.get(clientId);
@@ -54,7 +54,7 @@ async function loadTrace(traceUrl: string, traceFileName: string | null, client:
   try {
     // Allow 10% to hop from sw to page.
     const [fetchProgress, unzipProgress] = splitProgress(progress, [0.5, 0.4, 0.1]);
-    const backend = traceUrl.endsWith('json') ? new FetchTraceModelBackend(traceUrl, data.traceViewerServer) : new ZipTraceModelBackend(traceUrl, data.traceViewerServer, fetchProgress);
+    const backend = traceUrl.endsWith('json') ? new FetchTraceModelBackend(traceUrl, data.traceViewerServer) : new ZipTraceModelBackend(traceUrl, data.traceViewerServer, fetchProgress, rangeStart, rangeEnd);
     await traceModel.load(backend, unzipProgress);
   } catch (error: any) {
     // eslint-disable-next-line no-console
@@ -107,9 +107,11 @@ async function doFetch(event: FetchEvent): Promise<Response> {
     if (relativePath === '/contexts') {
       try {
         const limit = url.searchParams.has('limit') ? +url.searchParams.get('limit')! : undefined;
+        const rangeStart = url.searchParams.has('rangeStart') ? +url.searchParams.get('rangeStart')! : undefined;
+        const rangeEnd = url.searchParams.has('rangeEnd') ? +url.searchParams.get('rangeEnd')! : undefined;
         const traceModel = await loadTrace(traceUrl!, url.searchParams.get('traceFileName'), client, limit, (done: number, total: number) => {
           client.postMessage({ method: 'progress', params: { done, total } });
-        });
+        }, rangeStart, rangeEnd);
         return new Response(JSON.stringify(traceModel!.contextEntries), {
           status: 200,
           headers: { 'Content-Type': 'application/json' }

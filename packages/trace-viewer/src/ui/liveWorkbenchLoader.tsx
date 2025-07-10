@@ -51,10 +51,14 @@ export const LiveWorkbenchLoader: React.FC<{ traceJson: string }> = ({ traceJson
   return <Workbench model={model} isLive={true} />;
 };
 
-async function loadSingleTraceFile(traceJson: string): Promise<MultiTraceModel> {
+async function loadSingleTraceFile(traceJson: string, rangeStart?: number, rangeEnd?: number): Promise<MultiTraceModel> {
   const params = new URLSearchParams();
   params.set('trace', traceJson);
   params.set('limit', '1');
+  if (rangeStart !== undefined)
+    params.set('rangeStart', rangeStart.toString());
+  if (rangeEnd !== undefined)
+    params.set('rangeEnd', rangeEnd.toString());
   const response = await fetch(`contexts?${params.toString()}`);
   const contextEntries = await response.json() as ContextEntry[];
   return new MultiTraceModel(contextEntries);
