@@ -15,6 +15,7 @@
 */
 
 import * as React from 'react';
+import { traceUriWithChecklyRange } from '@isomorphic/trace/checklyTraceRange';
 import { TraceModel } from '@isomorphic/trace/traceModel';
 import './workbenchLoader.css';
 import { Workbench } from './workbench';
@@ -121,7 +122,11 @@ export const WorkbenchLoader: React.FunctionComponent<{
       testServerConnection.initialize({}).catch(() => {});
     } else if (url && !url.startsWith('blob:')) {
       // Don't re-use blob file URLs on page load (results in Fetch error)
-      setTraceURL(url);
+      try {
+        setTraceURL(traceUriWithChecklyRange(url, params));
+      } catch (error) {
+        setProcessingErrorMessage(error instanceof Error ? error.message : 'Invalid Checkly trace byte range.');
+      }
     }
   }, []);
 
