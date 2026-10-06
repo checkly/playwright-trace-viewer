@@ -15,6 +15,7 @@
  */
 // @ts-ignore
 import * as zipImport from '@zip.js/zip.js/lib/zip-no-worker-inflate.js';
+import { splitByteRange } from '@isomorphic/trace/traceByteRange';
 
 import type * as zip from '@zip.js/zip.js';
 import type { TraceLoaderBackend } from '@isomorphic/trace/traceLoader';
@@ -30,8 +31,12 @@ export class ZipTraceLoaderBackend implements TraceLoaderBackend {
   constructor(traceUri: string, progress: Progress) {
     zipjs.configure({ baseURL: self.location.href } as any);
 
+    const { url, range } = splitByteRange(traceUri);
+    const readerOptions: any = { mode: 'cors', preventHeadRequest: true };
+    if (range)
+      readerOptions.headers = { Range: range };
     this._zipReader = new zipjs.ZipReader(
-        new zipjs.HttpReader(this._resolveTraceURI(traceUri), { mode: 'cors', preventHeadRequest: true } as any),
+        new zipjs.HttpReader(this._resolveTraceURI(url), readerOptions),
         { useWebWorkers: false });
     this._entriesPromise = this._zipReader.getEntries({ onprogress: progress }).then(entries => {
       const map = new Map<string, zip.Entry>();

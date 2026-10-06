@@ -16,6 +16,7 @@
 
 import * as React from 'react';
 import { TraceModel } from '@isomorphic/trace/traceModel';
+import { withByteRange } from '@isomorphic/trace/traceByteRange';
 import './workbenchLoader.css';
 import { Workbench } from './workbench';
 import { TestServerConnection, WebSocketTestServerTransport } from '@testIsomorphic/testServerConnection';
@@ -124,7 +125,7 @@ export const WorkbenchLoader: React.FunctionComponent<{
       testServerConnection.initialize({}).catch(() => {});
     } else if (url && !url.startsWith('blob:')) {
       // Don't re-use blob file URLs on page load (results in Fetch error)
-      setTraceURL(url);
+      setTraceURL(withByteRange(url, params.get('rangeStart'), params.get('rangeEnd')));
     }
   }, []);
 
