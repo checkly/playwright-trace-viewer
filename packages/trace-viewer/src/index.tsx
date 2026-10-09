@@ -32,6 +32,8 @@ import { LiveWorkbenchLoader } from './ui/liveWorkbenchLoader';
     if (!navigator.serviceWorker.controller) {
       await new Promise<void>(f => {
         navigator.serviceWorker.oncontrollerchange = () => f();
+        // A hard reload skips the worker, and Firefox skips it for iframes too.
+        navigator.serviceWorker.ready.then(registration => registration.active?.postMessage({ method: 'claim' }));
       });
     }
 

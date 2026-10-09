@@ -31,6 +31,7 @@ type ServiceWorkerGlobalScope = {
   addEventListener(event: 'install', listener: (event: any) => void): void;
   addEventListener(event: 'activate', listener: (event: any) => void): void;
   addEventListener(event: 'fetch', listener: (event: any) => void): void;
+  addEventListener(event: 'message', listener: (event: any) => void): void;
   registration: {
     scope: string;
   };
@@ -57,6 +58,13 @@ self.addEventListener('install', function(event: any) {
 
 self.addEventListener('activate', function(event: any) {
   event.waitUntil(self.clients.claim());
+});
+
+// A page that loaded past an already active worker (a hard reload) waits for a claim
+// that only happens on activation, so it asks for one.
+self.addEventListener('message', function(event: any) {
+  if (event.data?.method === 'claim')
+    event.waitUntil(self.clients.claim());
 });
 
 type LoadedTrace = {
