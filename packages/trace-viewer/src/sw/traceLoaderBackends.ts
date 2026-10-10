@@ -16,6 +16,7 @@
 // @ts-ignore
 import * as zipImport from '@zip.js/zip.js/lib/zip-no-worker-inflate.js';
 
+import { checklyTraceRangeFromUri } from '@isomorphic/trace/checklyTraceRange';
 import type * as zip from '@zip.js/zip.js';
 import type { TraceLoaderBackend } from '@isomorphic/trace/traceLoader';
 
@@ -29,9 +30,14 @@ export class ZipTraceLoaderBackend implements TraceLoaderBackend {
 
   constructor(traceUri: string, progress: Progress) {
     zipjs.configure({ baseURL: self.location.href } as any);
+    const source = checklyTraceRangeFromUri(traceUri);
 
     this._zipReader = new zipjs.ZipReader(
-        new zipjs.HttpReader(this._resolveTraceURI(traceUri), { mode: 'cors', preventHeadRequest: true } as any),
+        new zipjs.HttpReader(this._resolveTraceURI(source.traceUri), {
+          mode: 'cors',
+          preventHeadRequest: true,
+          headers: source.range ? { Range: `bytes=${source.range.start}-${source.range.end}` } : undefined,
+        } as any),
         { useWebWorkers: false });
     this._entriesPromise = this._zipReader.getEntries({ onprogress: progress }).then(entries => {
       const map = new Map<string, zip.Entry>();
