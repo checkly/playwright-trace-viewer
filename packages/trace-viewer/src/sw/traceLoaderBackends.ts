@@ -32,12 +32,11 @@ export class ZipTraceLoaderBackend implements TraceLoaderBackend {
     zipjs.configure({ baseURL: self.location.href } as any);
 
     const { url, range } = splitByteRange(traceUri);
-    const readerOptions: any = { mode: 'cors', preventHeadRequest: true };
-    if (range)
-      readerOptions.headers = { Range: range };
-    this._zipReader = new zipjs.ZipReader(
-        new zipjs.HttpReader(this._resolveTraceURI(url), readerOptions),
-        { useWebWorkers: false });
+    const resolvedUrl = this._resolveTraceURI(url);
+    const reader = range
+      ? new ByteRangeReader(resolvedUrl, range.start, range.end)
+      : new zipjs.HttpReader(resolvedUrl, { mode: 'cors', preventHeadRequest: true } as any);
+    this._zipReader = new zipjs.ZipReader(reader, { useWebWorkers: false });
     this._entriesPromise = this._zipReader.getEntries({ onprogress: progress }).then(entries => {
       const map = new Map<string, zip.Entry>();
       for (const entry of entries)
@@ -84,6 +83,49 @@ export class ZipTraceLoaderBackend implements TraceLoaderBackend {
     const writer = new zipjs.BlobWriter() as zip.BlobWriter;
     await entry.getData!(writer);
     return writer.getData();
+  }
+}
+
+// Small reads (the end of central directory, local file headers, small resources) are
+// rounded up to this, so a header and its entry usually come back in one request.
+const byteRangeReadAhead = 64 * 1024;
+
+// Reads the zip stored at bytes `start`-`end` (inclusive) of a larger object, fetching
+// only the parts zip.js asks for. Showing the actions needs the central directory and the
+// trace entries, not the resources, which are most of a trace's bytes.
+class ByteRangeReader extends zipjs.Reader<string> {
+  private _url: string;
+  private _start: number;
+  private _buffer: { offset: number, data: Uint8Array } | undefined;
+
+  constructor(url: string, start: number, end: number) {
+    super(url);
+    this._url = url;
+    this._start = start;
+    this.size = end - start + 1;
+  }
+
+  override async readUint8Array(index: number, length: number): Promise<Uint8Array> {
+    length = Math.min(length, this.size - index);
+    // zip.js may transfer the arrays it gets, so the read-ahead buffer only hands out copies.
+    const buffer = this._buffer;
+    if (buffer && index >= buffer.offset && index + length <= buffer.offset + buffer.data.length)
+      return buffer.data.slice(index - buffer.offset, index - buffer.offset + length);
+    const fetchLength = Math.min(Math.max(length, byteRangeReadAhead), this.size - index);
+    const data = await this._fetch(index, fetchLength);
+    if (fetchLength === length)
+      return data;
+    this._buffer = { offset: index, data };
+    return data.slice(0, length);
+  }
+
+  private async _fetch(index: number, length: number): Promise<Uint8Array> {
+    const first = this._start + index;
+    const response = await fetch(this._url, { mode: 'cors', headers: { Range: `bytes=${first}-${first + length - 1}` } });
+    // A 200 would be the whole object, not the requested bytes.
+    if (response.status !== 206)
+      throw new Error(`Expected a partial response, got ${response.status} ${response.statusText}`);
+    return new Uint8Array(await response.arrayBuffer());
   }
 }
 
