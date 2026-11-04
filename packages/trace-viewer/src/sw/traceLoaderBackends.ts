@@ -27,15 +27,15 @@ type Progress = (done: number, total: number) => undefined;
 export class ZipTraceLoaderBackend implements TraceLoaderBackend {
   private _zipReader: zip.ZipReader<unknown>;
   private _entriesPromise: Promise<Map<string, zip.Entry>>;
+  private _blockReader: BlockRangeReader | undefined;
 
   constructor(traceUri: string, progress: Progress) {
     zipjs.configure({ baseURL: self.location.href } as any);
 
     const { url, range } = splitByteRange(traceUri);
     const resolvedUrl = this._resolveTraceURI(url);
-    const reader = range
-      ? new ByteRangeReader(resolvedUrl, range.start, range.end)
-      : new zipjs.HttpReader(resolvedUrl, { mode: 'cors', preventHeadRequest: true } as any);
+    this._blockReader = range ? new BlockRangeReader(resolvedUrl, range.start, range.end) : undefined;
+    const reader = this._blockReader ?? new zipjs.HttpReader(resolvedUrl, { mode: 'cors', preventHeadRequest: true } as any);
     this._zipReader = new zipjs.ZipReader(reader, { useWebWorkers: false });
     this._entriesPromise = this._zipReader.getEntries({ onprogress: progress }).then(entries => {
       const map = new Map<string, zip.Entry>();
@@ -53,6 +53,12 @@ export class ZipTraceLoaderBackend implements TraceLoaderBackend {
 
   isLive() {
     return false;
+  }
+
+  // Called once the actions are shown. Reads the rest of a ranged trace in the background,
+  // so resources open from memory later, including after the signed trace url expires.
+  prefetch() {
+    this._blockReader?.fill();
   }
 
   async entryNames(): Promise<string[]> {
@@ -86,17 +92,18 @@ export class ZipTraceLoaderBackend implements TraceLoaderBackend {
   }
 }
 
-// Small reads (the end of central directory, local file headers, small resources) are
-// rounded up to this, so a header and its entry usually come back in one request.
-const byteRangeReadAhead = 64 * 1024;
+// Reads are served from blocks of this size, each fetched once.
+const blockSize = 256 * 1024;
+// Concurrent fetches while filling in the rest of the trace in the background.
+const fillConnections = 4;
 
 // Reads the zip stored at bytes `start`-`end` (inclusive) of a larger object, fetching
-// only the parts zip.js asks for. Showing the actions needs the central directory and the
-// trace entries, not the resources, which are most of a trace's bytes.
-class ByteRangeReader extends zipjs.Reader<string> {
+// only the blocks zip.js asks for. Showing the actions needs the central directory and
+// the trace entries, not the resources, which are most of a trace's bytes.
+class BlockRangeReader extends zipjs.Reader<string> {
   private _url: string;
   private _start: number;
-  private _buffer: { offset: number, data: Uint8Array } | undefined;
+  private _blocks: (Promise<Uint8Array> | undefined)[] = [];
 
   constructor(url: string, start: number, end: number) {
     super(url);
@@ -107,25 +114,64 @@ class ByteRangeReader extends zipjs.Reader<string> {
 
   override async readUint8Array(index: number, length: number): Promise<Uint8Array> {
     length = Math.min(length, this.size - index);
-    // zip.js may transfer the arrays it gets, so the read-ahead buffer only hands out copies.
-    const buffer = this._buffer;
-    if (buffer && index >= buffer.offset && index + length <= buffer.offset + buffer.data.length)
-      return buffer.data.slice(index - buffer.offset, index - buffer.offset + length);
-    const fetchLength = Math.min(Math.max(length, byteRangeReadAhead), this.size - index);
-    const data = await this._fetch(index, fetchLength);
-    if (fetchLength === length)
-      return data;
-    this._buffer = { offset: index, data };
-    return data.slice(0, length);
+    const first = Math.floor(index / blockSize);
+    const last = Math.floor((index + length - 1) / blockSize);
+    const blocks = await Promise.all(Array.from({ length: last - first + 1 }, (_, i) => this._block(first + i)));
+    // Always a fresh array, because zip.js may transfer the arrays it gets.
+    const result = new Uint8Array(length);
+    let written = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const blockStart = (first + i) * blockSize;
+      const from = Math.max(index, blockStart) - blockStart;
+      const to = Math.min(index + length, blockStart + blocks[i].length) - blockStart;
+      result.set(blocks[i].subarray(from, to), written);
+      written += to - from;
+    }
+    return result;
   }
 
-  private async _fetch(index: number, length: number): Promise<Uint8Array> {
-    const first = this._start + index;
+  fill() {
+    const count = Math.ceil(this.size / blockSize);
+    const fetched = (index: number) => this._block(index).then(() => true, () => false);
+    let next = 0;
+    const worker = async () => {
+      while (next < count) {
+        const index = next++;
+        // One retry covers a dropped connection. Failing twice means the url no longer works,
+        // so reads fetch what is missing and report the error.
+        if (!await fetched(index) && !await fetched(index))
+          return;
+      }
+    };
+    for (let i = 0; i < fillConnections; i++)
+      void worker();
+  }
+
+  private _block(index: number): Promise<Uint8Array> {
+    const cached = this._blocks[index];
+    if (cached)
+      return cached;
+    const offset = index * blockSize;
+    const block = this._fetch(offset, Math.min(blockSize, this.size - offset));
+    this._blocks[index] = block;
+    // A failed block is fetched again by the next read that needs it.
+    block.catch(() => {
+      if (this._blocks[index] === block)
+        this._blocks[index] = undefined;
+    });
+    return block;
+  }
+
+  private async _fetch(offset: number, length: number): Promise<Uint8Array> {
+    const first = this._start + offset;
     const response = await fetch(this._url, { mode: 'cors', headers: { Range: `bytes=${first}-${first + length - 1}` } });
     // A 200 would be the whole object, not the requested bytes.
     if (response.status !== 206)
       throw new Error(`Expected a partial response, got ${response.status} ${response.statusText}`);
-    return new Uint8Array(await response.arrayBuffer());
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (data.length !== length)
+      throw new Error(`Expected ${length} bytes, got ${data.length}`);
+    return data;
   }
 }
 
